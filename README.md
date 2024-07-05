@@ -1,3 +1,139 @@
+# Program for Automatically Creating Legal Outputs in Accordance with License Compliance Obligations
+
+## Overview
+
+This program automatically creates legal outputs that comply with license fulfillment obligations. Legal outputs refer to documents containing code that must be disclosed, as well as documents with license clauses that require reproduction reporting.
+
+## Key Points
+
+The program automates the following operations as features of the ORT report function:
+- Analyzing license compatibility and fulfillment obligations of OSS licenses by acquiring code through ORT.
+- Extracting the original license clauses from the code.
+- Obtaining package source code for code that has a disclosure obligation.
+    * Currently, sources are attached for all packages where source code can be obtained.
+- Registering package dependencies in SW360 and attaching the license text (in CLIXML format) and the package's source code to SW360.
+    The correspondence between ORT data and SW360 records:
+    |ORT Data|SW360 Record|Remarks|
+    |---|---|---|
+    |OrtResult|Project|Create a Project in SW360 as a record corresponding to the analysis result data of ORT.|
+    |Project|Release|Since the analysis results of ORT are managed as data of one project, create a Release in SW360 as a record corresponding to the Project node in ORT's dependency tree. Sub SW360 Projects are not created.|
+    |Package|Release|Create a Release in SW360 as a record corresponding to the Package node in ORT's dependency tree.|
+    |Scope|-|Since there is no record in SW360 corresponding to ORT's Scope, skip the Scope node in ORT's dependency tree and directly connect the child nodes of Scope to the parent node of Scope. This relationship becomes a link between Project and Release in SW360.|
+
+## Implementation Details (Extension of Existing ORT Functions)
+- About the addition of a custom Report function
+    The specific processing for each output type of the Report function is provided as an implementation class of the Reporter interface. The Reporter interface is a derivative of ORT's Plugin interface and operates as part of ORT's architecture, which is designed for loose coupling between modules.
+    Correspondence for adding a custom Report function:
+    - Add a submodule to ort/plugins/reporters.
+        Place build.gradle.kts according to the structure of other plugin folders, and place the source under src/main.
+    - Adding an implementation class of the Report interface
+        Add an implementation class of the org.ossreviewtoolkit.reporter.Reporter interface.
+        The string specified in the member variable type is treated as the option string for the -f option when executing the ort report command (also dynamically reflected in the help text).
+        Report processing can be defined by overriding the generateReport function.
+        The ReporterInput object provided as an argument contains information such as package information and license text, which are the basis for the report function. The return is a list of generated files.
+    - Definition for the service loader
+        ORT obtains plugin class instances through Java's ServiceLoader. It is necessary to add the definition of the added Reporter implementation class to the following file.
+        plugins/reporters/<custom plugin>/src/main/resources/META-INF/services/org.ossreviewtoolkit.reporter.Reporter
+
+## Function Details
+- Environment Configuration
+    - Adding ORT's binary folder to PATH
+        ```bash
+        $ export PATH=/home/ubuntu/work/ort-work/ort-gitlab/cli/build/install/ort/bin:$PATH
+        ```
+    - Adding the SW360 host to NoProxy (if the SW360 host is deployed in the local network)
+        ```bash
+        $ export JAVA_OPTS="$JAVA_OPTS -Dhttp.nonProxyHosts=<SW360 host>"
+        $ export no_proxy=$no_proxy,<SW360 host>
+        ```
+    - ORT's config settings
+        The connection information for SW360 is used in the existing ORT config's scan storage settings.
+        Add the following settings to the config.yml file. If the config.yml file does not exist, create a config.yml file in the ~/.ort/config folder.
+
+        ```yaml
+        ort:
+        scanner:
+            storages:
+            sw360Configuration:
+                restUrl: "http://127.0.0.1:8080/resource/api/"
+                authUrl: "http://127.0.0.1:8080/authorization/oauth/token"
+                username: admin@sw360.org
+                password: password
+                clientId: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+                clientPassword: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+                token: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        ```
+
+        Reference configuration:
+        [1](https://github.com/oss-review-toolkit/ort/blob/main/model/src/main/resources/reference.yml)
+
+    - Building the scan environment
+        Since this report function uses the result files and cache files of ORT's scan function, it is necessary to install tools such as scancode in the execution environment beforehand.
+
+- How to execute the report function
+    ```bash
+    $ ort -P <ORT options> report -f Sw360LicenseReport -i <path to scan-result file> -o <path to output folder> --license-classifications-file=<path to license-classifications file>
+    ```
+    Example:
+    ```bash
+    $ ort -P ort.reporter.config.Sw360LicenseReport.options.dependencyNetwork=true -P ort.reporter.config.Sw360LicenseReport.options.projectName=MY_ORT_PROJECT_1 -P ort.reporter.config.Sw360LicenseReport.options.projectVersion=1.00 report -f Sw360LicenseReport -i ./ort-results/scan/scan-result.yml -o ./ort-results/report-sw360 --license-classifications-file=license-classifications.yml
+    ```
+
+    Explanation of parameters:
+    |Option|Value|Required|Description|
+    |---|---|---|---|
+    |-f|Sw360LicenseReport|✓|Specification of the report type. If using Sw360LicenseReport, it is a fixed string.|
+    |-i|Path to scan-result file|✓|The path to the ORT result file that serves as input.|
+    |-o|Path to output folder|✓|The path to the folder where the report files will be output. Specify an empty folder.|
+    |--license-classifications-file|Path to license-classifications file|✓|The path to the file defining the categories of licenses. The license-classifications file is created based on the sample file provided by the official ORT. [2](https://github.com/oss-review-toolkit/ort/blob/main/examples/license-classifications.yml)|
+    |-P ort.reporter.config.Sw360LicenseReport.options.dependencyNetwork|Boolean||A flag to switch whether to register the DependencyNetwork to the created project. (The default value is false.)|
+    |-P ort.reporter.config.Sw360LicenseReport.options.licenseTextAttachment|License text attachment flag||A flag to switch whether to attach the license text obtained from the package's source code to SW360's Release. (The default value is true.)|
+    |-P ort.reporter.config.Sw360LicenseReport.options.projectName|SW360 project name||Specify the project name in SW360 where the ORT report results will be registered. (The default value is ORT_LICENSE_REPORT.)|
+    |-P ort.reporter.config.Sw360LicenseReport.options.projectVersion|SW360 project version||Specify the version of the project in SW360 where the ORT report results will be registered. (The default value is 1.00.)|
+
+- Function Explanation
+    - Outputting report information to SW360 based on ORT's scan result information
+        The scan result file scan-result.yml is received as the input file. License and copyright texts are obtained from ORT's scan result information (the texts refer to the cache).
+    
+    - Registering the report information to SW360 according to the EvaluatedModel of ORT, and registering the dependency tree of Project and Release to SW360.
+        If the option flag is enabled, update the DependencyNetwork.
+
+    - Attaching source code, license text, and CLIXML
+        Determine the license classification for each package, and obtain the source code and license text. The obtained files are saved to the output folder and attached to SW360's Release.
+        The license classification information follows the definitions in the command argument license-classifications.yml.
+        license-classifications.yml:
+        ```yaml
+        categories:
+        - name: "copyleft"
+        - name: "strong-copyleft"
+        - name: "copyleft-limited"
+        - name: "permissive"
+          description: "Licenses with permissive obligations."
+        - name: "public-domain"
+        - name: "include-in-notice-file"
+          description: >-
+            This category is checked by templates used by the ORT report generator. The licenses associated with this
+            category are included into NOTICE files.
+        - name: "include-source-code-offer-in-notice-file"
+          description: >-
+            A marker category that indicates that the licenses assigned to it require that the source code of the packages
+            needs to be provided.
+
+        categorizations:
+        - id: "AGPL-1.0"
+          categories:
+          - "copyleft"
+          - "include-in-notice-file"
+          - "include-source-code-offer-in-notice-file"
+        ```
+
+# Copyright
+
+Copyright © 2024 TOSHIBA CORPORATION, All Rights Reserved.
+
+
+# README (OSS Review Toolkit)
+
 ![OSS Review Toolkit Logo](./logos/ort.png)
 
 &nbsp;

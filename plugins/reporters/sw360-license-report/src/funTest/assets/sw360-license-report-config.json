@@ -1,0 +1,11 @@
+{
+    "storage": {
+        "restUrl" : "",
+        "authUrl" : "",
+        "username" : "",
+        "password" : "",
+        "clientId" : "",
+        "clientPassword" : "",
+        "token" : ""
+    }
+}
